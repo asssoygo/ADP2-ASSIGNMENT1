@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order & Payment Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+  <div class="max-w-5xl mx-auto px-4 py-8">
+    <div class="mb-8">
+      <h1 class="text-3xl font-bold">Order & Payment Demo</h1>
+      <p class="text-slate-600 mt-2">Simple frontend for testing Order Service and Payment Service endpoints.</p>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <section class="bg-white rounded-2xl shadow-sm p-6">
+        <h2 class="text-xl font-semibold mb-4">Create Order</h2>
+        <form id="createOrderForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Customer ID</label>
+            <input id="customerId" class="w-full border rounded-xl px-3 py-2" value="cust-1" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Item Name</label>
+            <input id="itemName" class="w-full border rounded-xl px-3 py-2" value="Laptop" required />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Amount</label>
+            <input id="amount" type="number" class="w-full border rounded-xl px-3 py-2" value="15000" required />
+          </div>
+          <button class="w-full bg-slate-900 text-white rounded-xl py-2.5 font-medium hover:opacity-90 transition">Create Order</button>
+        </form>
+        <pre id="createOrderResult" class="mt-4 bg-slate-100 rounded-xl p-4 text-sm overflow-auto min-h-[120px]"></pre>
+      </section>
+
+      <section class="bg-white rounded-2xl shadow-sm p-6">
+        <h2 class="text-xl font-semibold mb-4">Get Order</h2>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Order ID</label>
+            <input id="orderIdInput" class="w-full border rounded-xl px-3 py-2" placeholder="Enter order ID" />
+          </div>
+          <button id="getOrderBtn" class="w-full bg-blue-600 text-white rounded-xl py-2.5 font-medium hover:opacity-90 transition">Get Order</button>
+        </div>
+        <pre id="getOrderResult" class="mt-4 bg-slate-100 rounded-xl p-4 text-sm overflow-auto min-h-[120px]"></pre>
+      </section>
+
+      <section class="bg-white rounded-2xl shadow-sm p-6">
+        <h2 class="text-xl font-semibold mb-4">Get Payment</h2>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Order ID</label>
+            <input id="paymentOrderIdInput" class="w-full border rounded-xl px-3 py-2" placeholder="Enter order ID" />
+          </div>
+          <button id="getPaymentBtn" class="w-full bg-emerald-600 text-white rounded-xl py-2.5 font-medium hover:opacity-90 transition">Get Payment</button>
+        </div>
+        <pre id="getPaymentResult" class="mt-4 bg-slate-100 rounded-xl p-4 text-sm overflow-auto min-h-[120px]"></pre>
+      </section>
+
+      <section class="bg-white rounded-2xl shadow-sm p-6">
+        <h2 class="text-xl font-semibold mb-4">Cancel Order</h2>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Order ID</label>
+            <input id="cancelOrderIdInput" class="w-full border rounded-xl px-3 py-2" placeholder="Enter order ID" />
+          </div>
+          <button id="cancelOrderBtn" class="w-full bg-rose-600 text-white rounded-xl py-2.5 font-medium hover:opacity-90 transition">Cancel Order</button>
+        </div>
+        <pre id="cancelOrderResult" class="mt-4 bg-slate-100 rounded-xl p-4 text-sm overflow-auto min-h-[120px]"></pre>
+      </section>
+    </div>
+
+    <section class="bg-white rounded-2xl shadow-sm p-6 mt-6">
+      <h2 class="text-xl font-semibold mb-4">Quick Notes</h2>
+      <ul class="list-disc pl-5 space-y-2 text-slate-600">
+        <li>Order Service runs on <code>http://localhost:8080</code></li>
+        <li>Payment Service runs on <code>http://localhost:8081</code></li>
+        <li>If amount is more than <code>100000</code>, payment should be declined.</li>
+        <li>Paid or failed orders cannot be cancelled.</li>
+      </ul>
+    </section>
+  </div>
+
+  <script>
+    const ORDER_BASE = 'http://localhost:8080';
+    const PAYMENT_BASE = 'http://localhost:8081';
+
+    function printResult(elementId, data) {
+      document.getElementById(elementId).textContent = typeof data === 'string'
+        ? data
+        : JSON.stringify(data, null, 2);
+    }
+
+    async function handleResponse(response) {
+      const text = await response.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { raw: text };
+      }
+
+      if (!response.ok) {
+        throw new Error(JSON.stringify(data, null, 2));
+      }
+
+      return data;
+    }
+
+    document.getElementById('createOrderForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {
+        customer_id: document.getElementById('customerId').value,
+        item_name: document.getElementById('itemName').value,
+        amount: Number(document.getElementById('amount').value)
+      };
+
+      try {
+        const response = await fetch(`${ORDER_BASE}/orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await handleResponse(response);
+        printResult('createOrderResult', data);
+
+        if (data.id) {
+          document.getElementById('orderIdInput').value = data.id;
+          document.getElementById('paymentOrderIdInput').value = data.id;
+          document.getElementById('cancelOrderIdInput').value = data.id;
+        }
+      } catch (error) {
+        printResult('createOrderResult', error.message);
+      }
+    });
+
+    document.getElementById('getOrderBtn').addEventListener('click', async () => {
+      const orderId = document.getElementById('orderIdInput').value.trim();
+      if (!orderId) return printResult('getOrderResult', 'Enter order ID');
+
+      try {
+        const response = await fetch(`${ORDER_BASE}/orders/${orderId}`);
+        const data = await handleResponse(response);
+        printResult('getOrderResult', data);
+      } catch (error) {
+        printResult('getOrderResult', error.message);
+      }
+    });
+
+    document.getElementById('getPaymentBtn').addEventListener('click', async () => {
+      const orderId = document.getElementById('paymentOrderIdInput').value.trim();
+      if (!orderId) return printResult('getPaymentResult', 'Enter order ID');
+
+      try {
+        const response = await fetch(`${PAYMENT_BASE}/payments/${orderId}`);
+        const data = await handleResponse(response);
+        printResult('getPaymentResult', data);
+      } catch (error) {
+        printResult('getPaymentResult', error.message);
+      }
+    });
+
+    document.getElementById('cancelOrderBtn').addEventListener('click', async () => {
+      const orderId = document.getElementById('cancelOrderIdInput').value.trim();
+      if (!orderId) return printResult('cancelOrderResult', 'Enter order ID');
+
+      try {
+        const response = await fetch(`${ORDER_BASE}/orders/${orderId}/cancel`, {
+          method: 'PATCH'
+        });
+        const data = await handleResponse(response);
+        printResult('cancelOrderResult', data);
+      } catch (error) {
+        printResult('cancelOrderResult', error.message);
+      }
+    });
+  </script>
+</body>
+</html>
