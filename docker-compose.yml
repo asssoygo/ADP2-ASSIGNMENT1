@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  order-db:
+    image: postgres
+    container_name: order-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: order_db
+    ports:
+      - "5433:5432"
+
+  payment-db:
+    image: postgres
+    container_name: payment-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123
+      POSTGRES_DB: payment_db
+    ports:
+      - "5434:5432"
