@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package payment;
+
+option go_package = "github.com/asssoygo/ADP2-ASSIGNMENT1/proto/paymentpb";
+
+service PaymentService {
+  rpc ProcessPayment (PaymentRequest) returns (PaymentResponse);
+}
+
+message PaymentRequest {
+  string order_id = 1;
+  int64 amount = 2;
+}
+
+message PaymentResponse {
+  string status = 1;
+}

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "github.com/asssoygo/ADP2-ASSIGNMENT1/proto/orderpb";
+
+service OrderService {
+  rpc SubscribeToOrderUpdates (OrderRequest) returns (stream OrderStatusUpdate);
+}
+
+message OrderRequest {
+  string order_id = 1;
+}
+
+message OrderStatusUpdate {
+  string order_id = 1;
+  string status = 2;
+}
