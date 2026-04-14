@@ -23,6 +23,7 @@ func NewRouter(handler *OrderHandler) *gin.Engine {
 	r.GET("/orders/:id", handler.GetOrder)
 	r.GET("/orders", handler.GetOrdersByAmountRange)
 	r.PATCH("/orders/:id/cancel", handler.CancelOrder)
+	r.PATCH("/orders/:id/status", handler.UpdateOrderStatus)
 
 	return r
 }

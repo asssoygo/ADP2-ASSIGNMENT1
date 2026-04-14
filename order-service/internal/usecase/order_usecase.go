@@ -96,3 +96,22 @@ func (u *OrderUsecase) GetOrdersByAmountRange(minAmount, maxAmount int64) ([]dom
 
 	return u.repo.GetByAmountRange(minAmount, maxAmount)
 }
+
+func (u *OrderUsecase) UpdateOrderStatus(id string, newStatus string) (*domain.Order, error) {
+	if id == "" {
+		return nil, errors.New("order_id is required")
+	}
+	if newStatus == "" {
+		return nil, errors.New("status is required")
+	}
+
+	if _, err := u.repo.GetByID(id); err != nil {
+		return nil, err
+	}
+
+	if err := u.repo.UpdateStatus(id, newStatus); err != nil {
+		return nil, err
+	}
+
+	return u.repo.GetByID(id)
+}

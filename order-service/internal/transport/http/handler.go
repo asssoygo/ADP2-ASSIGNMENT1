@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"order-service/internal/stream"
 	"order-service/internal/usecase"
 	"strconv"
 
@@ -11,16 +12,24 @@ import (
 
 type OrderHandler struct {
 	usecase *usecase.OrderUsecase
+	streams *stream.Manager
 }
 
-func NewOrderHandler(usecase *usecase.OrderUsecase) *OrderHandler {
-	return &OrderHandler{usecase: usecase}
+func NewOrderHandler(usecase *usecase.OrderUsecase, streams *stream.Manager) *OrderHandler {
+	return &OrderHandler{
+		usecase: usecase,
+		streams: streams,
+	}
 }
 
 type createOrderRequest struct {
 	CustomerID string `json:"customer_id"`
 	ItemName   string `json:"item_name"`
 	Amount     int64  `json:"amount"`
+}
+
+type updateStatusRequest struct {
+	Status string `json:"status"`
 }
 
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
@@ -32,7 +41,8 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 
 	order, err := h.usecase.CreateOrder(req.CustomerID, req.ItemName, req.Amount)
 	if err != nil {
-		if err.Error() == "payment service unavailable" {
+		if err.Error() == "payment service unavailable" ||
+			len(err.Error()) >= 27 && err.Error()[:27] == "payment service unavailable" {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 			return
 		}
@@ -40,6 +50,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
+	h.streams.Publish(order.ID, order.Status)
 	c.JSON(http.StatusCreated, order)
 }
 
@@ -72,6 +83,30 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 		return
 	}
 
+	h.streams.Publish(order.ID, order.Status)
+	c.JSON(http.StatusOK, order)
+}
+
+func (h *OrderHandler) UpdateOrderStatus(c *gin.Context) {
+	id := c.Param("id")
+
+	var req updateStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	order, err := h.usecase.UpdateOrderStatus(id, req.Status)
+	if err != nil {
+		if err.Error() == "order not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.streams.Publish(order.ID, order.Status)
 	c.JSON(http.StatusOK, order)
 }
 

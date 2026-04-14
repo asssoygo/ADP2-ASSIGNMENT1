@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"log"
+	"net"
 	"order-service/internal/app"
 	"os"
 
@@ -12,7 +13,8 @@ import (
 func main() {
 	dbURL := getEnv("ORDER_DB_URL", "postgres://postgres:123@localhost:5433/order_db?sslmode=disable")
 	paymentGRPCAddr := getEnv("PAYMENT_GRPC_ADDR", "localhost:50051")
-	port := getEnv("PORT", "8080")
+	httpPort := getEnv("PORT", "8080")
+	grpcPort := getEnv("ORDER_GRPC_PORT", "50052")
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -24,10 +26,22 @@ func main() {
 		log.Fatal("failed to ping db: ", err)
 	}
 
-	router := app.BuildRouter(db, paymentGRPCAddr)
+	router, grpcServer := app.BuildServers(db, paymentGRPCAddr)
 
-	log.Println("order-service running on port " + port)
-	if err := router.Run(":" + port); err != nil {
+	lis, err := net.Listen("tcp", ":"+grpcPort)
+	if err != nil {
+		log.Fatal("failed to listen grpc: ", err)
+	}
+
+	go func() {
+		log.Println("order-service grpc running on port " + grpcPort)
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatal("failed to run grpc server: ", err)
+		}
+	}()
+
+	log.Println("order-service http running on port " + httpPort)
+	if err := router.Run(":" + httpPort); err != nil {
 		log.Fatal("failed to run server: ", err)
 	}
 }

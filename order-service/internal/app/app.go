@@ -5,14 +5,17 @@ import (
 	"log"
 
 	"order-service/internal/repository/postgres"
+	"order-service/internal/stream"
+	orderGRPC "order-service/internal/transport/grpc"
 	orderHTTP "order-service/internal/transport/http"
 	"order-service/internal/usecase"
 	"order-service/pkg/grpcclient"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc"
 )
 
-func BuildRouter(db *sql.DB, paymentGRPCAddr string) *gin.Engine {
+func BuildServers(db *sql.DB, paymentGRPCAddr string) (*gin.Engine, *grpc.Server) {
 	orderRepo := postgres.NewOrderRepository(db)
 
 	paymentClient, err := grpcclient.NewPaymentClient(paymentGRPCAddr)
@@ -21,7 +24,13 @@ func BuildRouter(db *sql.DB, paymentGRPCAddr string) *gin.Engine {
 	}
 
 	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient)
-	orderHandler := orderHTTP.NewOrderHandler(orderUsecase)
+	streams := stream.NewManager()
 
-	return orderHTTP.NewRouter(orderHandler)
+	orderHandler := orderHTTP.NewOrderHandler(orderUsecase, streams)
+	router := orderHTTP.NewRouter(orderHandler)
+
+	grpcServer := grpc.NewServer()
+	orderGRPC.RegisterOrderGRPCServer(grpcServer, orderUsecase, streams)
+
+	return router, grpcServer
 }
