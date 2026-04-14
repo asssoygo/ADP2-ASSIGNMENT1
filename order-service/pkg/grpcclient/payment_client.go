@@ -40,7 +40,7 @@ func (p *PaymentClient) CreatePayment(orderID string, amount int64) (string, err
 		Amount:  amount,
 	})
 	if err != nil {
-		return "", errors.New("payment service unavailable")
+		return "", errors.New("payment service unavailable: " + err.Error())
 	}
 
 	return resp.Status, nil
