@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package payment;
 
-option go_package = "github.com/asssoygo/ADP2-ASSIGNMENT1/proto/paymentpb";
+option go_package = "contracts/paymentpb;paymentpb";
 
 service PaymentService {
   rpc ProcessPayment (PaymentRequest) returns (PaymentResponse);

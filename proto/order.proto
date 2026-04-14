@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package order;
 
-option go_package = "github.com/asssoygo/ADP2-ASSIGNMENT1/proto/orderpb";
+option go_package = "contracts/orderpb;orderpb";
 
 service OrderService {
   rpc SubscribeToOrderUpdates (OrderRequest) returns (stream OrderStatusUpdate);

@@ -2,17 +2,24 @@ package app
 
 import (
 	"database/sql"
+	"log"
+
 	"order-service/internal/repository/postgres"
 	orderHTTP "order-service/internal/transport/http"
 	"order-service/internal/usecase"
-	"order-service/pkg/httpclient"
+	"order-service/pkg/grpcclient"
 
 	"github.com/gin-gonic/gin"
 )
 
-func BuildRouter(db *sql.DB, paymentBaseURL string) *gin.Engine {
+func BuildRouter(db *sql.DB, paymentGRPCAddr string) *gin.Engine {
 	orderRepo := postgres.NewOrderRepository(db)
-	paymentClient := httpclient.NewPaymentClient(paymentBaseURL)
+
+	paymentClient, err := grpcclient.NewPaymentClient(paymentGRPCAddr)
+	if err != nil {
+		log.Fatal("failed to create grpc payment client: ", err)
+	}
+
 	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient)
 	orderHandler := orderHTTP.NewOrderHandler(orderUsecase)
 

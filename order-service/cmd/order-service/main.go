@@ -11,7 +11,7 @@ import (
 
 func main() {
 	dbURL := getEnv("ORDER_DB_URL", "postgres://postgres:123@localhost:5433/order_db?sslmode=disable")
-	paymentBaseURL := getEnv("PAYMENT_SERVICE_URL", "http://localhost:8081")
+	paymentGRPCAddr := getEnv("PAYMENT_GRPC_ADDR", "localhost:50051")
 	port := getEnv("PORT", "8080")
 
 	db, err := sql.Open("postgres", dbURL)
@@ -24,7 +24,7 @@ func main() {
 		log.Fatal("failed to ping db: ", err)
 	}
 
-	router := app.BuildRouter(db, paymentBaseURL)
+	router := app.BuildRouter(db, paymentGRPCAddr)
 
 	log.Println("order-service running on port " + port)
 	if err := router.Run(":" + port); err != nil {

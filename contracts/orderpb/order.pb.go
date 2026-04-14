@@ -128,7 +128,7 @@ const file_proto_order_proto_rawDesc = "" +
 	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status2Z\n" +
 	"\fOrderService\x12J\n" +
-	"\x17SubscribeToOrderUpdates\x12\x13.order.OrderRequest\x1a\x18.order.OrderStatusUpdate0\x01B4Z2github.com/asssoygo/ADP2-ASSIGNMENT1/proto/orderpbb\x06proto3"
+	"\x17SubscribeToOrderUpdates\x12\x13.order.OrderRequest\x1a\x18.order.OrderStatusUpdate0\x01B\x1bZ\x19contracts/orderpb;orderpbb\x06proto3"
 
 var (
 	file_proto_order_proto_rawDescOnce sync.Once

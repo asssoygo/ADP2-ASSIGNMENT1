@@ -128,7 +128,7 @@ const file_proto_payment_proto_rawDesc = "" +
 	"\x0fPaymentResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status2U\n" +
 	"\x0ePaymentService\x12C\n" +
-	"\x0eProcessPayment\x12\x17.payment.PaymentRequest\x1a\x18.payment.PaymentResponseB6Z4github.com/asssoygo/ADP2-ASSIGNMENT1/proto/paymentpbb\x06proto3"
+	"\x0eProcessPayment\x12\x17.payment.PaymentRequest\x1a\x18.payment.PaymentResponseB\x1fZ\x1dcontracts/paymentpb;paymentpbb\x06proto3"
 
 var (
 	file_proto_payment_proto_rawDescOnce sync.Once
