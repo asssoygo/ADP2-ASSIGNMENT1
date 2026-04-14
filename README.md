@@ -180,3 +180,181 @@ This project satisfies all requirements:
 ✅ business rules enforced
 ✅ migrations included
 ✅ README and diagram
+
+
+
+
+
+
+
+# AP2 Assignment 2 — gRPC Microservices (Order & Payment)
+
+## 📌 Overview
+
+This project extends Assignment 1 by introducing **gRPC-based communication** and **real-time streaming** between microservices.
+
+The system follows a **Clean Architecture** approach and consists of two services:
+
+* **Order Service** (REST + gRPC server for streaming)
+* **Payment Service** (gRPC server)
+
+---
+
+## 🧱 Architecture
+
+Frontend (REST) → Order Service → gRPC → Payment Service → PostgreSQL
+
+* Order Service handles HTTP requests
+* Payment Service processes payments via gRPC
+* Internal communication is fully migrated from REST to gRPC
+
+---
+
+## ⚙️ Technologies
+
+* Go (Golang)
+* gRPC + Protocol Buffers
+* PostgreSQL (Dockerized)
+* Gin (HTTP framework)
+* Docker Compose
+
+---
+
+## 📦 Services
+
+### 🧾 Order Service
+
+* REST API (Create/Get/Cancel orders)
+* gRPC Server (Streaming updates)
+* gRPC Client (calls Payment Service)
+* Manages order lifecycle
+
+### 💳 Payment Service
+
+* gRPC Server
+* Processes payments
+* Applies business rules:
+
+  * Amount ≤ 100000 → Authorized
+  * Amount > 100000 → Declined
+
+---
+
+## 🔗 gRPC Communication
+
+### Payment RPC
+
+```proto
+rpc ProcessPayment(PaymentRequest) returns (PaymentResponse);
+```
+
+### Streaming RPC
+
+```proto
+rpc SubscribeToOrderUpdates(OrderRequest) returns (stream OrderStatusUpdate);
+```
+
+---
+
+## 🔄 Streaming (Real-time Updates)
+
+* Clients subscribe to order updates via gRPC
+* When order status changes in DB:
+
+  * Order Service publishes update
+  * Subscribers receive updates instantly
+
+✔ Real-time
+✔ Based on actual DB changes (not simulated)
+
+---
+
+## 🚀 How to Run
+
+### 1. Start databases
+
+```bash
+docker compose up -d
+```
+
+### 2. Run Payment Service
+
+```bash
+cd payment-service
+go run ./cmd/payment-service
+```
+
+### 3. Run Order Service
+
+```bash
+cd order-service
+go run ./cmd/order-service
+```
+
+---
+
+## 🧪 Test Scenarios
+
+### ✅ Successful Payment
+
+* amount = 15000
+* result: Paid
+
+### ❌ Declined Payment
+
+* amount = 150001
+* result: Failed / Declined
+
+---
+
+## 📡 Streaming Test
+
+### 1. Start subscriber
+
+```bash
+go run ./cmd/order-subscriber <order_id>
+```
+
+### 2. Update order status
+
+```bash
+PATCH /orders/:id/status
+```
+
+### 3. Result
+
+Subscriber receives updates instantly:
+
+```
+status = Paid → Shipped → Delivered
+```
+
+---
+
+## 📂 Repository Structure
+
+```
+contracts/        # generated protobuf code
+order-service/    # order logic + streaming
+payment-service/  # payment gRPC server
+frontend/         # simple UI
+```
+
+---
+
+## 🎯 Key Features
+
+* Contract-first design (proto)
+* gRPC server-client architecture
+* Clean Architecture preserved
+* Real-time streaming
+* Database-driven updates
+
+---
+
+## 📊 Status
+
+✔ Assignment 2 complete
+✔ gRPC fully implemented
+✔ Streaming implemented
+✔ Ready for demonstration
