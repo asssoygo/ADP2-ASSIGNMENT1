@@ -54,3 +54,39 @@ func (r *PaymentRepository) GetByOrderID(orderID string) (*domain.Payment, error
 
 	return &payment, nil
 }
+func (r *PaymentRepository) ListByStatus(status string) ([]domain.Payment, error) {
+	query := `
+		SELECT id, order_id, transaction_id, amount, status
+		FROM payments
+		WHERE status = $1
+		ORDER BY id
+	`
+
+	rows, err := r.db.Query(query, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var payments []domain.Payment
+
+	for rows.Next() {
+		var payment domain.Payment
+		if err := rows.Scan(
+			&payment.ID,
+			&payment.OrderID,
+			&payment.TransactionID,
+			&payment.Amount,
+			&payment.Status,
+		); err != nil {
+			return nil, err
+		}
+		payments = append(payments, payment)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return payments, nil
+}

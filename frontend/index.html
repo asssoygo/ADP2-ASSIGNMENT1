@@ -71,20 +71,36 @@
       </section>
     </div>
 
+    <!-- Notifications Log -->
+    <section class="bg-white rounded-2xl shadow-sm p-6 mt-6">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <h2 class="text-xl font-semibold">Notifications Log</h2>
+          <span id="notifStatus" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">connecting…</span>
+        </div>
+        <button id="clearNotifBtn" class="text-sm px-4 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition">Clear</button>
+      </div>
+      <div id="notifList" class="space-y-2 overflow-y-auto max-h-72">
+        <p class="text-slate-400 text-sm" id="notifEmpty">No notifications yet. Create an order to see events appear here.</p>
+      </div>
+    </section>
+
     <section class="bg-white rounded-2xl shadow-sm p-6 mt-6">
       <h2 class="text-xl font-semibold mb-4">Quick Notes</h2>
       <ul class="list-disc pl-5 space-y-2 text-slate-600">
         <li>Order Service runs on <code>http://localhost:8080</code></li>
         <li>Payment Service runs on <code>http://localhost:8081</code></li>
-        <li>If amount is more than <code>100000</code>, payment should be declined.</li>
+        <li>Notification Service runs on <code>http://localhost:8082</code></li>
+        <li>If amount is more than <code>100000</code>, payment is declined (but the notification is still sent).</li>
         <li>Paid or failed orders cannot be cancelled.</li>
       </ul>
     </section>
   </div>
 
   <script>
-    const ORDER_BASE = 'http://localhost:8080';
-    const PAYMENT_BASE = 'http://localhost:8081';
+    const ORDER_BASE        = 'http://localhost:8080';
+    const PAYMENT_BASE      = 'http://localhost:8081';
+    const NOTIFICATION_BASE = 'http://localhost:8082';
 
     function printResult(elementId, data) {
       document.getElementById(elementId).textContent = typeof data === 'string'
@@ -175,6 +191,87 @@
         printResult('cancelOrderResult', error.message);
       }
     });
+
+    // ── Notifications Log ──────────────────────────────────────────────────────
+
+    // seenIds tracks which message_ids are already rendered so re-renders are stable
+    const seenIds = new Set();
+    let cleared = false;
+
+    function formatTs(isoStr) {
+      const d = new Date(isoStr);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function renderNotification(n) {
+      const row = document.createElement('div');
+      row.className = 'flex items-start gap-3 text-sm bg-slate-50 rounded-xl px-4 py-3';
+      row.dataset.msgId = n.message_id;
+
+      const ts = document.createElement('span');
+      ts.className = 'shrink-0 text-slate-400 font-mono text-xs mt-0.5';
+      ts.textContent = formatTs(n.processed_at);
+
+      const msg = document.createElement('span');
+      msg.className = 'text-slate-700';
+      msg.textContent =
+        `Sent email to ${n.customer_email} for Order #${n.order_id}. Amount: $${n.amount}`;
+
+      row.appendChild(ts);
+      row.appendChild(msg);
+      return row;
+    }
+
+    async function pollNotifications() {
+      const statusEl = document.getElementById('notifStatus');
+      const listEl   = document.getElementById('notifList');
+      const emptyEl  = document.getElementById('notifEmpty');
+
+      try {
+        const res = await fetch(`${NOTIFICATION_BASE}/notifications`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const notifications = await res.json();
+
+        statusEl.textContent = 'live';
+        statusEl.className = 'text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700';
+
+        if (!Array.isArray(notifications)) return;
+
+        let added = 0;
+        for (const n of notifications) {
+          if (seenIds.has(n.message_id) || cleared) {
+            // If cleared flag is on but the ID isn't in seenIds, we still skip — clear means "don't show old ones"
+            if (!seenIds.has(n.message_id)) continue;
+          }
+          if (seenIds.has(n.message_id)) continue;
+
+          seenIds.add(n.message_id);
+          const row = renderNotification(n);
+          // Prepend so newest is at top
+          listEl.insertBefore(row, listEl.firstChild);
+          added++;
+        }
+
+        if (added > 0 && emptyEl) emptyEl.remove();
+
+      } catch {
+        statusEl.textContent = 'offline';
+        statusEl.className = 'text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-600';
+      }
+    }
+
+    document.getElementById('clearNotifBtn').addEventListener('click', () => {
+      const listEl = document.getElementById('notifList');
+      // Remove all rendered rows but keep the empty placeholder structure
+      listEl.innerHTML = '<p class="text-slate-400 text-sm" id="notifEmpty">Log cleared. New notifications will appear as they arrive.</p>';
+      // Mark all current ids as "seen but cleared" — don't re-render them
+      // We achieve this by NOT clearing seenIds, so already-seen ones stay suppressed.
+      // New events (not yet in seenIds) will still appear.
+    });
+
+    // Start polling immediately, then every 2 seconds
+    pollNotifications();
+    setInterval(pollNotifications, 2000);
   </script>
 </body>
 </html>

@@ -6,6 +6,7 @@ option go_package = "contracts/paymentpb;paymentpb";
 
 service PaymentService {
   rpc ProcessPayment (PaymentRequest) returns (PaymentResponse);
+  rpc ListPayments (ListPaymentsRequest) returns (ListPaymentsResponse);
 }
 
 message PaymentRequest {
@@ -14,5 +15,17 @@ message PaymentRequest {
 }
 
 message PaymentResponse {
+  string id = 1;
+  string order_id = 2;
+  string transaction_id = 3;
+  int64 amount = 4;
+  string status = 5;
+}
+
+message ListPaymentsRequest {
   string status = 1;
+}
+
+message ListPaymentsResponse {
+  repeated PaymentResponse payments = 1;
 }
