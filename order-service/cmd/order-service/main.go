@@ -8,6 +8,7 @@ import (
 	"os"
 
 	_ "github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -15,6 +16,7 @@ func main() {
 	paymentGRPCAddr := getEnv("PAYMENT_GRPC_ADDR", "localhost:50051")
 	httpPort := getEnv("PORT", "8080")
 	grpcPort := getEnv("ORDER_GRPC_PORT", "50052")
+	redisURL := getEnv("REDIS_URL", "redis://localhost:6379")
 
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
@@ -26,7 +28,13 @@ func main() {
 		log.Fatal("failed to ping db: ", err)
 	}
 
-	router, grpcServer := app.BuildServers(db, paymentGRPCAddr)
+	redisOpt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		log.Fatal("failed to parse redis URL: ", err)
+	}
+	redisClient := redis.NewClient(redisOpt)
+
+	router, grpcServer := app.BuildServers(db, paymentGRPCAddr, redisClient)
 
 	lis, err := net.Listen("tcp", ":"+grpcPort)
 	if err != nil {

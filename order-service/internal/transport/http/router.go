@@ -5,9 +5,10 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
-func NewRouter(handler *OrderHandler) *gin.Engine {
+func NewRouter(handler *OrderHandler, redisClient *redis.Client) *gin.Engine {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
@@ -18,6 +19,8 @@ func NewRouter(handler *OrderHandler) *gin.Engine {
 		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
+
+	r.Use(RateLimiterMiddleware(redisClient))
 
 	r.POST("/orders", handler.CreateOrder)
 	r.GET("/orders/:id", handler.GetOrder)

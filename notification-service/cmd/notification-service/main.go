@@ -13,8 +13,10 @@ import (
 func main() {
 	rabbitURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	httpPort := getEnv("HTTP_PORT", "8082")
+	redisURL := getEnv("REDIS_URL", "redis://localhost:6379")
+	providerMode := getEnv("PROVIDER_MODE", "SIMULATED")
 
-	application, err := app.NewApp(rabbitURL, httpPort)
+	application, err := app.NewApp(rabbitURL, httpPort, redisURL, providerMode)
 	if err != nil {
 		log.Fatalf("failed to start notification service: %v", err)
 	}

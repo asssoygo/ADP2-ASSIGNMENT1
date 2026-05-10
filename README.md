@@ -1,17 +1,24 @@
-# AP2 Assignment 3 — Event-Driven Architecture with RabbitMQ
+# AP2 Assignment 4 — Performance Optimization: Redis Caching, Adapter Pattern, Rate Limiter
 
 ## Overview
 
-This project extends the gRPC microservices platform with an event-driven layer using RabbitMQ. When a payment is processed, the Payment Service publishes an event to a queue. The Notification Service consumes that event and logs an email notification.
+This project extends the event-driven microservices platform (Assignment 3) with performance optimizations:
+- **Redis cache-aside** pattern in the Order Service for sub-millisecond reads
+- **Redis-backed idempotency** in the Notification Service for durable deduplication across restarts
+- **Adapter pattern** for pluggable email providers (Simulated / Real)
+- **Exponential backoff retry** for email delivery
+- **Redis-based rate limiter** middleware (10 req/min per IP) in the Order Service
 
 ## Architecture
 
 ```
 Client
   |
-  v (HTTP)
+  v (HTTP + Rate Limiter)
 Order Service (:8080)
-  |
+  |  \
+  |   \──── Redis (:6379)  ← cache-aside for GET /orders/:id
+  |                          ← rate limiter (INCR + EXPIRE per IP)
   v (gRPC)
 Payment Service (:8081 HTTP / :50051 gRPC)
   |
@@ -19,79 +26,137 @@ Payment Service (:8081 HTTP / :50051 gRPC)
 RabbitMQ (:5672 / Management UI :15672)
   |
   v (consumer)
-Notification Service
+Notification Service (:8082)
+  |
+  \──── Redis (:6379)  ← idempotency keys (notification:{payment_id}, TTL 24h)
+          ↑
+     SimulatedEmailSender (EmailSender adapter)
 ```
 
-### Event Flow
+### Cache Flow for GET /orders/:id
 
 ```
-POST /orders
-  → Order created (status: Pending)
-  → gRPC call to Payment Service
-  → Payment saved to DB (status: Authorized / Declined)
-  → Event published to RabbitMQ queue "payment.completed"
-  → Notification Service receives event
-  → Logs: [Notification] Sent email to {email} for Order #{id}. Amount: ${amount}
-  → Manual ACK sent to RabbitMQ
+GET /orders/:id
+  → Check Redis key "order:{id}"
+  → Cache HIT  → return cached order (no DB query)
+  → Cache MISS → query PostgreSQL → store in Redis with TTL 5 min → return order
+
+Status change (payment, cancel, manual update):
+  → Update PostgreSQL
+  → DELETE Redis key "order:{id}"   ← cache invalidation
 ```
 
 ## Services
 
-| Service              | Role                                  | Port(s)          |
-|----------------------|---------------------------------------|------------------|
-| order-service        | Manages order lifecycle               | HTTP :8080, gRPC :50052 |
-| payment-service      | Processes payments, publishes events  | HTTP :8081, gRPC :50051 |
-| notification-service | Consumes events, logs notifications   | —                |
-| rabbitmq             | Message broker                        | AMQP :5672, UI :15672 |
-| order-postgres       | Order database                        | :5433            |
-| payment-postgres     | Payment database                      | :5434            |
+| Service              | Role                                           | Port(s)               |
+|----------------------|------------------------------------------------|-----------------------|
+| order-service        | Manages order lifecycle, Redis cache + rate limiter | HTTP :8080, gRPC :50052 |
+| payment-service      | Processes payments, publishes events           | HTTP :8081, gRPC :50051 |
+| notification-service | Consumes events, retries with backoff, Redis idempotency | HTTP :8082 |
+| rabbitmq             | Message broker                                 | AMQP :5672, UI :15672 |
+| redis                | Cache + rate limiter + idempotency store       | :6379                 |
+| order-postgres       | Order database                                 | :5433                 |
+| payment-postgres     | Payment database                               | :5434                 |
 
-## Event-Driven Design Decisions
+## Cache Invalidation Strategy
 
-### Queue: `payment.completed`
+The Order Service uses **cache-aside** (lazy population) with **write-invalidation**:
 
-- **Durable queue**: survives RabbitMQ restarts
-- **Persistent messages** (`DeliveryMode: Persistent`): messages are written to disk
-- **Manual ACK** (consumer side): `msg.Ack(false)` is called only after successful processing; on error, `msg.Nack` requeues the message
+1. **Read**: Check Redis first. Cache hit → return immediately. Cache miss → query DB, write to cache, return.
+2. **Write**: After any status change (`Paid`, `Failed`, `Cancelled`, or manual update), DELETE the Redis key for that order.
+3. **TTL**: All cache entries expire after **5 minutes** as a safety net, even if invalidation is missed.
 
-### Idempotency
-
-The Notification Service maintains an in-memory `map[string]bool` keyed on `message_id` (which equals the payment's UUID). Before processing, it checks the map:
+This ensures reads are fast while mutations always reflect the latest state in the next read.
 
 ```go
-if u.processed[event.MessageID] {
-    log.Printf("[Notification] Duplicate message %s skipped", event.MessageID)
-    return nil
+// Cache key format
+cacheKey := fmt.Sprintf("order:%s", id)
+
+// On read
+if order, err := u.cache.Get(ctx, cacheKey); err == nil {
+    return order  // cache hit
+}
+order, _ := u.repo.GetByID(id)
+u.cache.Set(ctx, cacheKey, order, 5*time.Minute)
+
+// On write
+u.cache.Delete(ctx, fmt.Sprintf("order:%s", id))
+```
+
+## Retry / Backoff Logic (Notification Service)
+
+The `NotificationUsecase` retries email delivery up to **4 attempts** (1 initial + 3 retries) with **exponential backoff** delays:
+
+| Attempt | Delay before this retry |
+|---------|------------------------|
+| 1       | none (immediate)       |
+| 2       | 2 seconds              |
+| 3       | 4 seconds              |
+| 4       | 8 seconds              |
+
+If all 4 attempts fail, `ProcessPaymentEvent` returns an error, causing the RabbitMQ consumer to Nack the message (eventually routing it to the Dead Letter Queue after 3 consumer-level retries).
+
+The `SimulatedEmailSender` introduces a **500 ms artificial latency** and a **30% random failure rate** to demonstrate the retry logic in action.
+
+```
+[Notification] Attempt 1/4 failed for <id>: simulated email delivery failure
+[Notification] Retry 1/3 for <id>, waiting 2s
+[Notification] Attempt 2/4 failed for <id>: simulated email delivery failure
+[Notification] Retry 2/3 for <id>, waiting 4s
+[Notification] Attempt 3/4 succeeded
+[Email] Sent to customer@example.com for Order #<id>. Amount: $50000
+```
+
+## Idempotency Strategy (Notification Service)
+
+Before sending any email, the service checks a Redis key:
+
+```
+key:   "notification:{payment_id}"
+value: "1"
+TTL:   24 hours
+```
+
+**Flow:**
+1. `EXISTS notification:{payment_id}` → if key exists, skip and ACK (already processed)
+2. If not exists → send email with retry/backoff
+3. On success → `SET notification:{payment_id} 1 EX 86400`
+
+This replaces the old in-memory `map[string]bool` with a **durable, distributed** store. Idempotency now survives service restarts and works correctly across multiple replicas.
+
+## Rate Limiter (Order Service)
+
+All Order Service routes are protected by a Redis-based rate limiter using the **INCR + EXPIRE** pattern:
+
+```go
+key   := "rate:{clientIP}"
+count := redis.INCR(key)
+if count == 1 { redis.EXPIRE(key, 1 minute) }
+if count > 10 { return 429 Too Many Requests }
+```
+
+- **Limit**: 10 requests per minute per IP
+- **Window**: sliding 1-minute window (resets after the first request's EXPIRE fires)
+- **Response on exceed**: `HTTP 429` with `{"error": "rate limit exceeded"}`
+
+## Adapter Pattern (Email Provider)
+
+The `EmailSender` interface in the usecase layer decouples email delivery from business logic:
+
+```go
+type EmailSender interface {
+    Send(ctx context.Context, event domain.PaymentEvent) error
 }
 ```
 
-If the same message arrives twice (e.g., due to a network retry), it is silently skipped and ACKed without re-sending the notification.
+The `PROVIDER_MODE` environment variable selects the implementation:
 
-> Note: This map is in-memory only. On restart, already-processed IDs are forgotten. For production, use a persistent store (Redis, DB).
+| `PROVIDER_MODE` | Implementation          | Behaviour                                 |
+|-----------------|-------------------------|-------------------------------------------|
+| `SIMULATED`     | `SimulatedEmailSender`  | 500 ms sleep + 30% random failure rate    |
+| `REAL`          | (extend here)           | Plug in SendGrid, SES, etc.               |
 
-### ACK Logic
-
-| Scenario                        | Action                          |
-|---------------------------------|---------------------------------|
-| Message parsed and processed OK | `msg.Ack(false)` — remove from queue |
-| JSON unmarshal fails (malformed)| `msg.Nack(false, false)` — discard (no requeue) |
-| Processing error                | `msg.Nack(false, true)` — requeue for retry |
-
-ACK is never sent before `ProcessPaymentEvent` returns successfully. This guarantees at-least-once delivery.
-
-### Graceful Shutdown (Notification Service)
-
-```go
-signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-<-quit
-application.Consumer.Close()  // closes AMQP channel + connection
-```
-
-Closing the connection causes the `for msg := range msgs` loop to exit naturally, so the consumer goroutine stops cleanly.
-
-## Dead Letter Queue (DLQ)
-
-### Topology
+## Dead Letter Queue (DLQ) — unchanged from Assignment 3
 
 ```
 payment.completed  ──(Nack, no-requeue)──▶  payment.dlx (exchange)
@@ -100,75 +165,22 @@ payment.completed  ──(Nack, no-requeue)──▶  payment.dlx (exchange)
                                             payment.dead (queue)
 ```
 
-| RabbitMQ object     | Type     | Purpose                                              |
-|---------------------|----------|------------------------------------------------------|
-| `payment.dlx`       | Exchange | Direct exchange; receives dead-lettered messages     |
-| `payment.dead`      | Queue    | Stores messages that exhausted all retry attempts    |
-| `payment.completed` | Queue    | Main queue; configured with `x-dead-letter-exchange` |
-
-### Queue arguments on `payment.completed`
-
-| Argument                      | Value           | Effect                                                     |
-|-------------------------------|-----------------|------------------------------------------------------------|
-| `x-dead-letter-exchange`      | `payment.dlx`   | Routes rejected messages to the DLX                       |
-| `x-dead-letter-routing-key`   | `payment.dead`  | DLX routes to the DLQ by this key                         |
-| `x-message-ttl`               | `60000` (1 min) | Safety net: unprocessed messages expire to DLQ after 1 min |
-
-### Retry logic
-
-The consumer tracks per-`message_id` attempt counts in an in-memory map:
-
-```
-attempt 1 fails → Nack(requeue=true)  → back to payment.completed
-attempt 2 fails → Nack(requeue=true)  → back to payment.completed
-attempt 3 fails → Nack(requeue=false) → dead-lettered → payment.dead
-```
-
-On the DLQ side a goroutine logs:
-```
-[DLQ] Message <id> moved to dead letter queue after 3 attempts
-```
-
-### Upgrade safety
-
-If `payment.completed` already exists without DLQ args (e.g., from a previous run), RabbitMQ returns a `406 PRECONDITION_FAILED`. The consumer detects this, opens a fresh channel, deletes the stale queue, and re-declares it with the correct args — no manual intervention needed.
-
-### Simulating failure for demo
-
-Any order whose `customer_email` contains `"fail@"` will always return a processing error, triggering the full retry → DLQ path. The email is derived from the order ID in the payment service (`customer-<order_id>@example.com`), so to trigger a DLQ demo you can manually call the payment HTTP endpoint with a `fail@` address — or extend the order service to accept customer emails.
-
-**Quick demo:**
-```bash
-# Direct payment endpoint — forces a fail@ email
-curl -X POST http://localhost:8081/payments \
-  -H "Content-Type: application/json" \
-  -d '{"order_id":"demo-fail","amount":1000,"customer_email":"fail@example.com"}'
-```
-
-Then watch notification-service logs:
-```
-[Notification] Message <id> attempt 1/3 failed, requeuing: simulated processing failure
-[Notification] Message <id> attempt 2/3 failed, requeuing: simulated processing failure
-[Notification] Message <id> failed 3/3 times — routing to DLQ
-[DLQ] Message <id> moved to dead letter queue after 3 attempts
-```
-
 ## Clean Architecture Structure
 
-Each service follows the same layered structure:
-
 ```
-cmd/                    ← entry point (composition root)
+cmd/                          ← entry point (composition root)
 internal/
-  domain/               ← pure entities, no dependencies
-  usecase/              ← business logic + interfaces
-  repository/postgres/  ← database implementation (payment/order services)
-  infrastructure/rabbitmq/ ← RabbitMQ publisher/consumer
-  transport/            ← HTTP handlers, gRPC servers
-  app/                  ← dependency injection wiring
+  domain/                     ← pure entities, no dependencies
+  usecase/                    ← business logic + interfaces (OrderRepository,
+  │                              CacheRepository, PaymentClient, EmailSender)
+  repository/postgres/        ← DB implementation (order/payment services)
+  infrastructure/
+    cache/                    ← RedisCache (order-service)
+    rabbitmq/                 ← publisher / consumer
+    email/                    ← SimulatedEmailSender (notification-service)
+  transport/                  ← HTTP handlers, gRPC servers, middleware
+  app/                        ← dependency injection wiring
 ```
-
-The `EventPublisher` interface is defined in the **usecase** layer. The `rabbitmq.Publisher` struct in the **infrastructure** layer implements it. This keeps the business logic decoupled from the message broker.
 
 ## How to Run
 
@@ -182,7 +194,7 @@ The `EventPublisher` interface is defined in the **usecase** layer. The `rabbitm
 docker-compose up --build
 ```
 
-This starts: order-postgres, payment-postgres, rabbitmq, payment-service, order-service, notification-service.
+Starts: order-postgres, payment-postgres, redis, rabbitmq, payment-service, order-service, notification-service.
 
 ### 2. Run migrations
 
@@ -191,51 +203,65 @@ docker exec -i payment-postgres psql -U postgres -d payment_db < payment-service
 docker exec -i order-postgres psql -U postgres -d order_db < order-service/migrations/001_create_orders.sql
 ```
 
-### 3. Test the event flow
-
-Create an order (triggers payment → event → notification):
+### 3. Test cache-aside
 
 ```bash
+# Create an order
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"customer_id":"cust-001","item_name":"Laptop","amount":50000}'
+
+# First GET — cache MISS, queries PostgreSQL, stores in Redis
+curl http://localhost:8080/orders/<id>
+
+# Second GET — cache HIT, served from Redis
+curl http://localhost:8080/orders/<id>
 ```
 
-Check notification logs:
+### 4. Test rate limiter
 
 ```bash
-docker logs notification-service
-# Expected: [Notification] Sent email to customer-<order_id>@example.com for Order #<order_id>. Amount: $50000
+# Run 11 requests quickly — the 11th returns HTTP 429
+for i in $(seq 1 11); do
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/orders/<id>
+done
 ```
 
-### 4. RabbitMQ Management UI
+### 5. Test retry / backoff
+
+Watch notification-service logs — roughly 30% of emails fail and retry:
+
+```bash
+docker logs -f notification-service
+```
+
+### 6. RabbitMQ Management UI
 
 Open `http://localhost:15672` — login: `guest` / `guest`
-
-You can inspect the `payment.completed` queue, message rates, and consumers.
 
 ## API
 
 ### Order Service (:8080)
 
-| Method | Path                    | Description              |
-|--------|-------------------------|--------------------------|
-| POST   | /orders                 | Create order + payment   |
-| GET    | /orders/:id             | Get order by ID          |
-| GET    | /orders?min=&max=       | Get orders by amount range |
-| PATCH  | /orders/:id/cancel      | Cancel a pending order   |
-| PATCH  | /orders/:id/status      | Update order status      |
+| Method | Path                    | Description                   |
+|--------|-------------------------|-------------------------------|
+| POST   | /orders                 | Create order + payment        |
+| GET    | /orders/:id             | Get order (cache-aside)       |
+| GET    | /orders?min=&max=       | Get orders by amount range    |
+| PATCH  | /orders/:id/cancel      | Cancel a pending order        |
+| PATCH  | /orders/:id/status      | Update order status           |
 
-### Payment Service (:8081)
+### Notification Service (:8082)
 
-| Method | Path                    | Description              |
-|--------|-------------------------|--------------------------|
-| POST   | /payments               | Process payment directly |
-| GET    | /payments/:order_id     | Get payment by order ID  |
+| Method | Path            | Description                       |
+|--------|-----------------|-----------------------------------|
+| GET    | /notifications  | Recent processed notifications    |
 
 ## Business Rules
 
 - `amount > 100000` → payment **Declined**, order **Failed**
 - `amount <= 100000` → payment **Authorized**, order **Paid**
-- Inter-service calls have a 2-second timeout
-- Paid/Declined orders cannot be cancelled
+- Inter-service gRPC calls have a 2-second timeout
+- Cache TTL: **5 minutes** for order entries
+- Idempotency TTL: **24 hours** for notification keys
+- Rate limit: **10 requests/minute** per IP on all Order Service routes

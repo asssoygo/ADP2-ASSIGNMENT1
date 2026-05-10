@@ -1,21 +1,27 @@
 package usecase
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"order-service/internal/domain"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+const cacheTTL = 5 * time.Minute
+
 type OrderUsecase struct {
 	repo          OrderRepository
+	cache         CacheRepository
 	paymentClient PaymentClient
 }
 
-func NewOrderUsecase(repo OrderRepository, paymentClient PaymentClient) *OrderUsecase {
+func NewOrderUsecase(repo OrderRepository, cache CacheRepository, paymentClient PaymentClient) *OrderUsecase {
 	return &OrderUsecase{
 		repo:          repo,
+		cache:         cache,
 		paymentClient: paymentClient,
 	}
 }
@@ -44,6 +50,7 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 	paymentStatus, err := u.paymentClient.CreatePayment(order.ID, order.Amount)
 	if err != nil {
 		_ = u.repo.UpdateStatus(order.ID, "Failed")
+		u.invalidateCache(order.ID)
 		return nil, err
 	}
 
@@ -57,11 +64,25 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 		return nil, err
 	}
 
+	u.invalidateCache(order.ID)
 	return u.repo.GetByID(order.ID)
 }
 
 func (u *OrderUsecase) GetOrder(id string) (*domain.Order, error) {
-	return u.repo.GetByID(id)
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("order:%s", id)
+
+	if order, err := u.cache.Get(ctx, cacheKey); err == nil {
+		return order, nil
+	}
+
+	order, err := u.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = u.cache.Set(ctx, cacheKey, order, cacheTTL)
+	return order, nil
 }
 
 func (u *OrderUsecase) CancelOrder(id string) (*domain.Order, error) {
@@ -78,6 +99,7 @@ func (u *OrderUsecase) CancelOrder(id string) (*domain.Order, error) {
 		return nil, err
 	}
 
+	u.invalidateCache(id)
 	return u.repo.GetByID(id)
 }
 
@@ -113,5 +135,10 @@ func (u *OrderUsecase) UpdateOrderStatus(id string, newStatus string) (*domain.O
 		return nil, err
 	}
 
+	u.invalidateCache(id)
 	return u.repo.GetByID(id)
+}
+
+func (u *OrderUsecase) invalidateCache(id string) {
+	_ = u.cache.Delete(context.Background(), fmt.Sprintf("order:%s", id))
 }

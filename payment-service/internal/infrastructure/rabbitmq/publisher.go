@@ -33,7 +33,11 @@ func NewPublisher(url string) (*Publisher, error) {
 		false,
 		false,
 		false,
-		nil,
+		amqp.Table{
+			"x-dead-letter-exchange":    "payment.dlx",
+			"x-dead-letter-routing-key": "payment.dead",
+			"x-message-ttl":             int32(60000),
+		},
 	)
 	if err != nil {
 		ch.Close()

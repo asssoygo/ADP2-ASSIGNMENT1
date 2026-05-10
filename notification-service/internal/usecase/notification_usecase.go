@@ -1,16 +1,24 @@
 package usecase
 
 import (
-	"errors"
+	"context"
+	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
 	"notification-service/internal/domain"
+
+	"github.com/redis/go-redis/v9"
 )
 
-const maxNotifications = 50
+const (
+	maxNotifications = 50
+	maxAttempts      = 4 // 1 initial + 3 retries
+	idempotencyTTL   = 24 * time.Hour
+)
+
+var retryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second}
 
 type ProcessedNotification struct {
 	MessageID     string    `json:"message_id"`
@@ -22,40 +30,58 @@ type ProcessedNotification struct {
 
 type NotificationUsecase struct {
 	mu            sync.Mutex
-	processed     map[string]bool
 	notifications []ProcessedNotification
+	emailSender   EmailSender
+	redisClient   *redis.Client
 }
 
-func NewNotificationUsecase() *NotificationUsecase {
+func NewNotificationUsecase(emailSender EmailSender, redisClient *redis.Client) *NotificationUsecase {
 	return &NotificationUsecase{
-		processed:     make(map[string]bool),
 		notifications: make([]ProcessedNotification, 0, maxNotifications),
+		emailSender:   emailSender,
+		redisClient:   redisClient,
 	}
 }
 
 func (u *NotificationUsecase) ProcessPaymentEvent(event domain.PaymentEvent) error {
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	ctx := context.Background()
+	idempotencyKey := fmt.Sprintf("notification:%s", event.MessageID)
 
-	if u.processed[event.MessageID] {
+	exists, err := u.redisClient.Exists(ctx, idempotencyKey).Result()
+	if err != nil {
+		log.Printf("[Notification] Redis check failed for %s: %v", event.MessageID, err)
+	} else if exists > 0 {
 		log.Printf("[Notification] Duplicate message skipped: %s", event.MessageID)
 		return nil
 	}
 
-	// Demo: orders with "fail@" in the email simulate a processing failure so
-	// the DLQ retry logic can be observed.
-	if strings.Contains(event.CustomerEmail, "fail@") {
-		return errors.New("simulated processing failure (fail@ address)")
+	var sendErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := retryDelays[attempt-1]
+			log.Printf("[Notification] Retry %d/%d for %s, waiting %s",
+				attempt, maxAttempts-1, event.MessageID, delay)
+			time.Sleep(delay)
+		}
+
+		sendErr = u.emailSender.Send(ctx, event)
+		if sendErr == nil {
+			break
+		}
+		log.Printf("[Notification] Attempt %d/%d failed for %s: %v",
+			attempt+1, maxAttempts, event.MessageID, sendErr)
 	}
 
-	log.Printf(
-		"[Notification] Sent email to %s for Order #%s. Amount: $%d",
-		event.CustomerEmail,
-		event.OrderID,
-		event.Amount,
-	)
+	if sendErr != nil {
+		return sendErr
+	}
 
-	u.processed[event.MessageID] = true
+	if err := u.redisClient.Set(ctx, idempotencyKey, "1", idempotencyTTL).Err(); err != nil {
+		log.Printf("[Notification] Failed to set idempotency key for %s: %v", event.MessageID, err)
+	}
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.notifications = append(u.notifications, ProcessedNotification{
 		MessageID:     event.MessageID,
 		OrderID:       event.OrderID,
@@ -70,7 +96,6 @@ func (u *NotificationUsecase) ProcessPaymentEvent(event domain.PaymentEvent) err
 	return nil
 }
 
-// GetRecentNotifications returns up to 50 processed events, newest first.
 func (u *NotificationUsecase) GetRecentNotifications() []ProcessedNotification {
 	u.mu.Lock()
 	defer u.mu.Unlock()
